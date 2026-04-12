@@ -15,6 +15,7 @@ on:
         options:
           - all
           - cool_items
+          - best_seller
 
 jobs:
   scrape:
@@ -26,6 +27,8 @@ jobs:
         category:
           - name: cool_items
             display_name: Cool Items
+          - name: best_seller
+            display_name: Best Sellers
     
     name: Scrape ${{ matrix.category.display_name }}
     
