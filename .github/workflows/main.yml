@@ -1,9 +1,9 @@
-name: Daily Scrapers - ThinkGrid Categories
+name: Daily workflow - All Categories
 
 on:
   schedule:
-    # Run every 2 days at 1:00 AM UTC
-    - cron: '0 1 */2 * *'
+    # Run every 2 days at 12:00 AM UTC
+    - cron: '0 0 */2 * *'
   
   workflow_dispatch:  # Allow manual trigger with category selection
     inputs:
@@ -71,7 +71,7 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           S3_BUCKET_NAME: ${{ secrets.S3_BUCKET_NAME }}
         run: |
-          cd ThinkGrid/${{ matrix.category.name }}
+          cd ${{ matrix.category.name }}
           python scraper.py
       
       - name: Upload artifacts (backup)
@@ -80,11 +80,11 @@ jobs:
         with:
           name: ${{ matrix.category.name }}-results
           path: |
-            ThinkGrid/${{ matrix.category.name }}/data/*.xlsx
-            ThinkGrid/${{ matrix.category.name }}/data/images/*.jpg
-            ThinkGrid/${{ matrix.category.name }}/data/images/*.png
-            ThinkGrid/${{ matrix.category.name }}/data/images/*.gif
-            ThinkGrid/${{ matrix.category.name }}/data/images/*.webp
+            ${{ matrix.category.name }}/data/*.xlsx
+            ${{ matrix.category.name }}/data/images/*.jpg
+            ${{ matrix.category.name }}/data/images/*.png
+            ${{ matrix.category.name }}/data/images/*.gif
+            ${{ matrix.category.name }}/data/images/*.webp
           retention-days: 7
       
       - name: Notify on failure
