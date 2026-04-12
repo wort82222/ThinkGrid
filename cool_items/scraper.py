@@ -176,31 +176,28 @@ class CoolItemsScraper:
             print(f"  ⚠ Error extracting product: {e}")
             return None
     
-    def get_total_pages(self, page):
-        """Extract total number of pages from pagination"""
+    def has_next_page(self, page):
+        """Check if there's a next page by looking for the Next button"""
         
         try:
-            # Find all page links
-            page_links = page.query_selector_all('.pages-items .item a.page')
-            
-            if not page_links:
-                return 1
-            
-            # Extract page numbers
-            page_numbers = []
-            for link in page_links:
-                span = link.query_selector('span:last-child')
-                if span:
-                    try:
-                        page_num = int(span.inner_text().strip())
-                        page_numbers.append(page_num)
-                    except:
-                        pass
-            
-            return max(page_numbers) if page_numbers else 1
-            
+            # Look for the "Next" button in pagination
+            next_button = page.query_selector('.pages-item-next a.next')
+            return next_button is not None
         except Exception as e:
-            print(f"  ⚠ Error getting total pages: {e}")
+            print(f"  ⚠ Error checking next page: {e}")
+            return False
+    
+    def get_current_page_number(self, page):
+        """Extract current page number from pagination"""
+        
+        try:
+            # Find the current page indicator
+            current_page = page.query_selector('.pages-items .item.current .page span:last-child')
+            if current_page:
+                return int(current_page.inner_text().strip())
+            return 1
+        except Exception as e:
+            print(f"  ⚠ Error getting current page: {e}")
             return 1
     
     def scrape_page(self, page, page_num):
@@ -356,7 +353,7 @@ class CoolItemsScraper:
             return None
     
     def scrape_all_pages(self):
-        """Scrape all pages with pagination"""
+        """Scrape all pages with pagination - continues until no Next button"""
         
         print("\n" + "="*70)
         print("🚀 COOL ITEMS SCRAPER - WITH PAGINATION")
@@ -376,33 +373,33 @@ class CoolItemsScraper:
                 page.goto(self.base_url, wait_until='networkidle', timeout=30000)
                 print(f"✓ Page loaded: {page.title()}\n")
                 
-                # Get total pages
-                total_pages = self.get_total_pages(page)
-                print(f"📊 Total pages found: {total_pages}\n")
+                page_num = 1
                 
-                # Scrape first page
-                page_products = self.scrape_page(page, 1)
-                self.products.extend(page_products)
-                
-                # Scrape remaining pages
-                for page_num in range(2, total_pages + 1):
-                    print(f"\n⏳ Waiting 2s before next page...")
-                    time.sleep(2)
-                    
-                    # Navigate to next page
-                    next_url = f"{self.base_url}?p={page_num}"
-                    print(f"📡 Loading {next_url}")
-                    page.goto(next_url, wait_until='networkidle', timeout=30000)
-                    
-                    # Scrape this page
+                # Keep scraping while there are more pages
+                while True:
+                    # Scrape current page
                     page_products = self.scrape_page(page, page_num)
                     self.products.extend(page_products)
+                    
+                    # Check if there's a next page
+                    if self.has_next_page(page):
+                        page_num += 1
+                        print(f"\n⏳ Waiting 2s before next page...")
+                        time.sleep(2)
+                        
+                        # Navigate to next page
+                        next_url = f"{self.base_url}?p={page_num}"
+                        print(f"📡 Loading page {page_num}: {next_url}")
+                        page.goto(next_url, wait_until='networkidle', timeout=30000)
+                    else:
+                        print(f"\n✓ No more pages found. Reached last page: {page_num}")
+                        break
                 
                 print("\n" + "="*70)
                 print("✅ ALL PAGES SCRAPED SUCCESSFULLY")
                 print("="*70)
                 print(f"\nTotal products scraped: {len(self.products)}")
-                print(f"Across {total_pages} pages")
+                print(f"Across {page_num} pages")
                 
             except Exception as e:
                 print(f"\n❌ Error during scraping: {e}")
