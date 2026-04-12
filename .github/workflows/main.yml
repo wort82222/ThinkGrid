@@ -54,7 +54,7 @@ jobs:
       - name: Install dependencies
         if: steps.should_run.outputs.run == 'true'
         run: |
-          cd ThinkGrid/${{ matrix.category.name }}
+          cd ${{ matrix.category.name }}
           pip install --upgrade pip
           pip install -r requirements.txt
       
