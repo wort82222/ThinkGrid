@@ -16,6 +16,7 @@ on:
           - all
           - cool_items
           - best_seller
+          - supermarket
 
 jobs:
   scrape:
@@ -29,6 +30,8 @@ jobs:
             display_name: Cool Items
           - name: best_seller
             display_name: Best Sellers
+          - name: supermarket
+            display_name: Supermarket
     
     name: Scrape ${{ matrix.category.display_name }}
     
