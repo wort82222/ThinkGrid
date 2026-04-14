@@ -404,11 +404,11 @@ class SupermarketScraper:
                 await context.close()
                 await browser.close()
     
-    def download_image(self, image_url, product_id, image_index=0):
-        """Download product image"""
+    def download_image(self, image_url, product_id, image_index=0, upload_immediately=True):
+        """Download product image and optionally upload to S3 immediately"""
         
         if not image_url:
-            return None
+            return None, None
         
         try:
             # Download image
@@ -438,21 +438,32 @@ class SupermarketScraper:
                 for chunk in response.iter_content(chunk_size=8192):
                     f.write(chunk)
             
-            return str(local_path)
+            # Upload to S3 immediately if configured and requested
+            s3_path = None
+            if upload_immediately and self.s3_client:
+                image_s3_key = f"sheeel_data/year={self.year}/month={self.month}/day={self.day}/{self.category}/images/{filename}"
+                try:
+                    self.s3_client.upload_file(str(local_path), self.s3_bucket, image_s3_key)
+                    s3_path = f"s3://{self.s3_bucket}/{image_s3_key}"
+                except Exception as e:
+                    print(f"  ⚠ Error uploading image to S3: {e}")
+            
+            return str(local_path), s3_path
             
         except Exception as e:
             print(f"  ⚠ Error downloading image for product {product_id}: {e}")
-            return None
+            return None, None
     
     def download_all_images(self):
-        """Download all product images"""
+        """Download all product images and upload to S3 incrementally"""
         
         print("\n" + "="*70)
-        print("📥 DOWNLOADING PRODUCT IMAGES")
+        print("📥 DOWNLOADING & UPLOADING PRODUCT IMAGES")
         print("="*70)
         
         total_products = len(self.all_products)
         total_images_downloaded = 0
+        total_images_uploaded = 0
         
         for i, product in enumerate(self.all_products, 1):
             image_urls = product.get('image_urls', [])
@@ -460,19 +471,36 @@ class SupermarketScraper:
                 continue
             
             local_image_paths = []
+            s3_image_paths = []
+            
             for idx, img_url in enumerate(image_urls):
-                local_path = self.download_image(img_url, product['product_id'], idx)
+                local_path, s3_path = self.download_image(
+                    img_url, 
+                    product['product_id'], 
+                    idx,
+                    upload_immediately=True  # Upload as we download
+                )
                 if local_path:
                     local_image_paths.append(local_path)
                     total_images_downloaded += 1
+                if s3_path:
+                    s3_image_paths.append(s3_path)
+                    total_images_uploaded += 1
             
-            # Store all local paths as array
+            # Store all local and S3 paths as arrays
             product['local_image_paths'] = local_image_paths
+            product['s3_image_paths'] = s3_image_paths
                     
             if i % 10 == 0:
-                print(f"  Processed {i}/{total_products} products...")
+                if self.s3_client:
+                    print(f"  Processed {i}/{total_products} products (Downloaded: {total_images_downloaded}, Uploaded: {total_images_uploaded})...")
+                else:
+                    print(f"  Processed {i}/{total_products} products (Downloaded: {total_images_downloaded})...")
         
-        print(f"\n✓ Downloaded {total_images_downloaded} images from {total_products} products")
+        if self.s3_client:
+            print(f"\n✓ Downloaded {total_images_downloaded} images and uploaded {total_images_uploaded} to S3")
+        else:
+            print(f"\n✓ Downloaded {total_images_downloaded} images from {total_products} products")
     
     def save_to_excel(self, include_s3_paths=False):
         """Save data to Excel file with multiple sheets (one per subcategory)"""
@@ -542,45 +570,18 @@ class SupermarketScraper:
             return False
     
     def upload_results_to_s3(self):
-        """Upload Excel and images to S3 with date partitioning"""
+        """Upload Excel to S3 (images already uploaded incrementally)"""
         
         if not self.s3_client:
             print("\n⚠ S3 not configured, skipping S3 upload")
             return None
         
         print("\n" + "="*70)
-        print("☁️  UPLOADING TO S3")
+        print("☁️  UPLOADING EXCEL TO S3")
         print("="*70)
         
-        # Upload images first and add S3 paths
-        print(f"\n📷 Uploading images...")
-        total_images_uploaded = 0
-        
-        for product in self.all_products:
-            local_image_paths = product.get('local_image_paths', [])
-            if not local_image_paths:
-                continue
-            
-            s3_image_paths = []
-            for idx, local_path in enumerate(local_image_paths):
-                if os.path.exists(local_path):
-                    image_filename = os.path.basename(local_path)
-                    image_s3_key = f"sheeel_data/year={self.year}/month={self.month}/day={self.day}/{self.category}/images/{image_filename}"
-                    
-                    if self.upload_to_s3(local_path, image_s3_key):
-                        s3_path = f"s3://{self.s3_bucket}/{image_s3_key}"
-                        s3_image_paths.append(s3_path)
-                        total_images_uploaded += 1
-                        
-                        if total_images_uploaded % 10 == 0:
-                            print(f"  Uploaded {total_images_uploaded} images...")
-            
-            # Store S3 paths as array
-            product['s3_image_paths'] = s3_image_paths
-        
-        print(f"\n✓ Uploaded {total_images_uploaded} images to S3")
-        
-        # Create Excel file with S3 paths (multi-sheet)
+        # Images already uploaded incrementally during download
+        # Just create Excel file with S3 paths (multi-sheet)
         print(f"\n📊 Creating multi-sheet Excel file with S3 paths...")
         excel_path = self.save_to_excel(include_s3_paths=True)
         
