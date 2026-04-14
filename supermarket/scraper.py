@@ -66,19 +66,26 @@ class SupermarketScraper:
             subcategory_elements = await page.query_selector_all('.subcategory-link')
             
             subcategories = []
+            seen_slugs = set()  # Track unique subcategories
+            
             for elem in subcategory_elements:
                 url = await elem.get_attribute('href')
                 name = await elem.inner_text()
                 name = name.strip()
                 
-                if url and name:
+                # Filter: Only include URLs that belong to this category
+                if url and name and '/ar/supermarket/' in url:
                     # Extract clean subcategory slug from URL
                     slug = url.split('/')[-1].replace('.html', '')
-                    subcategories.append({
-                        'name': name,
-                        'url': url,
-                        'slug': slug
-                    })
+                    
+                    # Skip empty slugs and duplicates
+                    if slug and slug not in seen_slugs:
+                        seen_slugs.add(slug)
+                        subcategories.append({
+                            'name': name,
+                            'url': url,
+                            'slug': slug
+                        })
             
             print(f"✓ Found {len(subcategories)} subcategories:")
             for i, subcat in enumerate(subcategories, 1):
