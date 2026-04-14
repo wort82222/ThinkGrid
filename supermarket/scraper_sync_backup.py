@@ -1,13 +1,11 @@
 """
-Supermarket Scraper - Optimized with Concurrent Subcategory Scraping
+Supermarket Scraper - Complete Production Version with Subcategories
 Scrapes https://www.sheeel.com/ar/supermarket.html and all subcategories
-Uses asyncio + semaphore for parallel subcategory processing
 Saves data to S3 with date partitioning and downloads images
 Each subcategory is saved as a separate sheet in the Excel file
 """
 
-from playwright.async_api import async_playwright
-import asyncio
+from playwright.sync_api import sync_playwright
 import json
 import re
 import os
@@ -21,13 +19,12 @@ from urllib.parse import urlparse
 import hashlib
 
 class SupermarketScraper:
-    def __init__(self, s3_bucket=None, aws_access_key=None, aws_secret_key=None, max_concurrent_subcategories=3):
+    def __init__(self, s3_bucket=None, aws_access_key=None, aws_secret_key=None):
         self.base_url = "https://www.sheeel.com/ar/supermarket.html"
         self.category = "supermarket"
         self.subcategories = {}  # Will store {subcategory_name: [products]}
         self.all_products = []  # All products combined
         self.s3_bucket = s3_bucket
-        self.max_concurrent = max_concurrent_subcategories  # Control concurrency
         
         # Setup S3 if credentials provided
         if s3_bucket and aws_access_key and aws_secret_key:
@@ -51,7 +48,7 @@ class SupermarketScraper:
         self.local_data_dir.mkdir(exist_ok=True)
         self.local_images_dir.mkdir(exist_ok=True)
     
-    async def get_subcategories(self, page):
+    def get_subcategories(self, page):
         """Extract all subcategory links from the main category page"""
         
         print("\n" + "="*70)
@@ -60,16 +57,15 @@ class SupermarketScraper:
         
         try:
             # Wait for subcategory links to load
-            await page.wait_for_selector('.subcategory-link', timeout=10000)
+            page.wait_for_selector('.subcategory-link', timeout=10000)
             
             # Get all subcategory links
-            subcategory_elements = await page.query_selector_all('.subcategory-link')
+            subcategory_elements = page.query_selector_all('.subcategory-link')
             
             subcategories = []
             for elem in subcategory_elements:
-                url = await elem.get_attribute('href')
-                name = await elem.inner_text()
-                name = name.strip()
+                url = elem.get_attribute('href')
+                name = elem.inner_text().strip()
                 
                 if url and name:
                     # Extract clean subcategory slug from URL
@@ -90,17 +86,17 @@ class SupermarketScraper:
             print(f"❌ Error extracting subcategories: {e}")
             return []
     
-    async def has_next_page(self, page):
+    def has_next_page(self, page):
         """Check if there's a next page by looking for the Next button"""
         
         try:
-            next_button = await page.query_selector('.pages-item-next a.next')
+            next_button = page.query_selector('.pages-item-next a.next')
             return next_button is not None
         except Exception as e:
             print(f"  ⚠ Error checking next page: {e}")
             return False
     
-    async def scrape_page(self, page, page_num, subcategory_name):
+    def scrape_page(self, page, page_num, subcategory_name):
         """Scrape a single page by visiting each product link and extracting full details"""
         print(f"\n{'='*70}")
         print(f"📄 SCRAPING PAGE {page_num} - {subcategory_name}")
@@ -108,19 +104,19 @@ class SupermarketScraper:
         try:
             # Wait for products
             print(f"  ⏳ Waiting for product links...")
-            await page.wait_for_selector('[id^="product-item-info_"] > a', timeout=10000)
+            page.wait_for_selector('[id^="product-item-info_"] > a', timeout=10000)
             # Scroll to load all products
-            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            await asyncio.sleep(2)
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            time.sleep(2)
             # Get all product links
-            product_links = await page.eval_on_selector_all('[id^="product-item-info_"] > a', 'elements => elements.map(e => e.href)')
+            product_links = page.eval_on_selector_all('[id^="product-item-info_"] > a', 'elements => elements.map(e => e.href)')
             print(f"  ✓ Found {len(product_links)} product links on page {page_num}\n")
             
             # Extract data from each product page
             page_products = []
             for i, product_url in enumerate(product_links, 1):
                 print(f"  [{i}/{len(product_links)}] 🔗 {product_url.split('/')[-1][:50]}...")
-                product_data = await self.scrape_product_detail(page.context, product_url, i)
+                product_data = self.scrape_product_detail(page.context, product_url, i)
                 if product_data:
                     product_data['page_number'] = page_num
                     product_data['subcategory'] = subcategory_name
@@ -137,92 +133,88 @@ class SupermarketScraper:
             print(f"❌ Error scraping page {page_num}: {e}")
             return []
 
-    async def scrape_product_detail(self, context, product_url, index):
+    def scrape_product_detail(self, context, product_url, index):
         """Visit product detail page and extract all available fields"""
         try:
-            detail_page = await context.new_page()
-            await detail_page.goto(product_url, wait_until='networkidle', timeout=30000)
-            await detail_page.wait_for_selector('#maincontent .product-info-main', timeout=10000)
+            detail_page = context.new_page()
+            detail_page.goto(product_url, wait_until='networkidle', timeout=30000)
+            detail_page.wait_for_selector('#maincontent .product-info-main', timeout=10000)
             
             # Extract fields from product-info-main
-            info = await detail_page.query_selector('#maincontent .product-info-main')
+            info = detail_page.query_selector('#maincontent .product-info-main')
             product_data = {}
             
             # Product ID from form
-            product_id_input = await detail_page.query_selector('input[name="product"]')
+            product_id_input = detail_page.query_selector('input[name="product"]')
             if product_id_input:
-                product_data['product_id'] = int(await product_id_input.get_attribute('value'))
+                product_data['product_id'] = int(product_id_input.get_attribute('value'))
             else:
                 product_data['product_id'] = None
             
             # Title
-            title_el = await info.query_selector('.page-title .base')
-            product_data['name'] = (await title_el.inner_text()).strip() if title_el else None
+            title_el = info.query_selector('.page-title .base')
+            product_data['name'] = title_el.inner_text().strip() if title_el else None
             
             # SKU
-            sku_el = await detail_page.query_selector('.product-info.sku')
-            if sku_el:
-                sku_text = await sku_el.inner_text()
-                product_data['sku'] = sku_text.split(':')[0].strip()
-            else:
-                product_data['sku'] = None
+            sku_el = detail_page.query_selector('.product-info.sku')
+            product_data['sku'] = sku_el.inner_text().split(':')[0].strip() if sku_el else None
             
             # Availability
-            avail_el = await detail_page.query_selector('.availability-info')
-            product_data['availability'] = (await avail_el.inner_text()).strip() if avail_el else None
+            avail_el = detail_page.query_selector('.availability-info')
+            product_data['availability'] = avail_el.inner_text().strip() if avail_el else None
             
             # Times bought
-            bought_el = await detail_page.query_selector('.x-bought-count')
-            product_data['times_bought'] = (await bought_el.inner_text()).strip() if bought_el else None
+            bought_el = detail_page.query_selector('.x-bought-count')
+            product_data['times_bought'] = bought_el.inner_text().strip() if bought_el else None
             
             # Old price
-            old_price_el = await detail_page.query_selector('.old-price .price')
-            product_data['old_price'] = (await old_price_el.inner_text()).strip() if old_price_el else None
+            old_price_el = detail_page.query_selector('.old-price .price')
+            product_data['old_price'] = old_price_el.inner_text().strip() if old_price_el else None
             
             # Special price
-            special_price_el = await detail_page.query_selector('.special-price .price')
-            product_data['special_price'] = (await special_price_el.inner_text()).strip() if special_price_el else None
+            special_price_el = detail_page.query_selector('.special-price .price')
+            product_data['special_price'] = special_price_el.inner_text().strip() if special_price_el else None
             
             # Description
-            desc_el = await detail_page.query_selector('.product.attribute.overview .value')
-            product_data['description'] = (await desc_el.inner_text()).strip() if desc_el else None
+            desc_el = detail_page.query_selector('.product.attribute.overview .value')
+            product_data['description'] = desc_el.inner_text().strip() if desc_el else None
             
             # All images from product gallery
-            image_elements = await detail_page.query_selector_all('.product-gallery-image')
+            image_elements = detail_page.query_selector_all('.product-gallery-image')
             image_urls = []
             for img_el in image_elements:
-                img_url = await img_el.get_attribute('data-src') or await img_el.get_attribute('src')
+                img_url = img_el.get_attribute('data-src') or img_el.get_attribute('src')
                 if img_url:
                     image_urls.append(img_url)
             
             product_data['image_urls'] = image_urls  # Store as array
             
             # Deal timer
-            timer_el = await detail_page.query_selector('#deal-timer .time')
-            product_data['deal_time_left'] = (await timer_el.inner_text()).strip() if timer_el else None
+            timer_el = detail_page.query_selector('#deal-timer .time')
+            product_data['deal_time_left'] = timer_el.inner_text().strip() if timer_el else None
             
             # Discount badge
-            discount_el = await detail_page.query_selector('.discount-percent-item')
-            product_data['discount_badge'] = (await discount_el.inner_text()).strip() if discount_el else None
+            discount_el = detail_page.query_selector('.discount-percent-item')
+            product_data['discount_badge'] = discount_el.inner_text().strip() if discount_el else None
             
             # Extract features by section with labels
-            more_info_container = await detail_page.query_selector('#more-info')
+            more_info_container = detail_page.query_selector('#more-info')
             if more_info_container:
                 # Get all attribute sections
-                attribute_labels = await more_info_container.query_selector_all('.attribute-info.label')
+                attribute_labels = more_info_container.query_selector_all('.attribute-info.label')
                 
                 for label_el in attribute_labels:
-                    section_name = (await label_el.inner_text()).strip()
+                    section_name = label_el.inner_text().strip()
                     
                     # Get the next sibling <ul> element
-                    ul_element = await label_el.evaluate_handle('node => node.nextElementSibling')
+                    ul_element = label_el.evaluate_handle('node => node.nextElementSibling')
                     
                     # Extract list items
                     section_features = []
                     try:
-                        li_elements = await ul_element.as_element().query_selector_all('li')
+                        li_elements = ul_element.as_element().query_selector_all('li')
                         for li in li_elements:
-                            section_features.append((await li.inner_text()).strip())
+                            section_features.append(li.inner_text().strip())
                     except:
                         pass
                     
@@ -249,133 +241,121 @@ class SupermarketScraper:
             # Scraped at
             product_data['scraped_at'] = datetime.now().isoformat()
             
-            await detail_page.close()
+            detail_page.close()
             return product_data
         except Exception as e:
             print(f"       ❌ Error: {str(e)[:50]}")
             try:
-                await detail_page.close()
+                detail_page.close()
             except:
                 pass
             return None
     
-    async def scrape_subcategory(self, browser_context, subcategory, semaphore):
-        """Scrape all pages of a subcategory (with semaphore for concurrency control)"""
-        
-        async with semaphore:  # Limit concurrent subcategories
-            print("\n" + "="*70)
-            print(f"🛒 SCRAPING SUBCATEGORY: {subcategory['name']}")
-            print("="*70)
-            print(f"URL: {subcategory['url']}\n")
-            
-            page = await browser_context.new_page()
-            subcategory_products = []
-            
-            try:
-                # Load first page
-                print("📡 Loading first page...")
-                await page.goto(subcategory['url'], wait_until='networkidle', timeout=30000)
-                print(f"✓ Page loaded: {await page.title()}\n")
-                
-                page_num = 1
-                
-                # Keep scraping while there are more pages
-                while True:
-                    # Scrape current page
-                    page_products = await self.scrape_page(page, page_num, subcategory['name'])
-                    subcategory_products.extend(page_products)
-                    
-                    # Check if there's a next page
-                    if await self.has_next_page(page):
-                        page_num += 1
-                        print(f"\n⏳ Waiting 2s before next page...")
-                        await asyncio.sleep(2)
-                        
-                        # Navigate to next page
-                        next_url = f"{subcategory['url']}?p={page_num}"
-                        print(f"📡 Loading page {page_num}: {next_url}")
-                        await page.goto(next_url, wait_until='networkidle', timeout=30000)
-                    else:
-                        print(f"\n✓ No more pages found. Reached last page: {page_num}")
-                        break
-                
-                print("\n" + "="*70)
-                print(f"✅ SUBCATEGORY COMPLETE: {subcategory['name']}")
-                print("="*70)
-                print(f"Total products scraped: {len(subcategory_products)}")
-                print(f"Across {page_num} pages\n")
-                
-            except Exception as e:
-                print(f"\n❌ Error scraping subcategory {subcategory['name']}: {e}")
-                import traceback
-                traceback.print_exc()
-            
-            finally:
-                await page.close()
-            
-            return subcategory['slug'], subcategory['name'], subcategory_products
-    
-    async def scrape_all_subcategories(self):
-        """Scrape all subcategories concurrently with semaphore control"""
+    def scrape_subcategory(self, browser_context, subcategory):
+        """Scrape all pages of a subcategory"""
         
         print("\n" + "="*70)
-        print("🚀 SUPERMARKET SCRAPER - CONCURRENT SUBCATEGORIES")
+        print(f"🛒 SCRAPING SUBCATEGORY: {subcategory['name']}")
         print("="*70)
-        print(f"\nMain URL: {self.base_url}")
-        print(f"Max Concurrent Subcategories: {self.max_concurrent}\n")
+        print(f"URL: {subcategory['url']}\n")
         
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            context = await browser.new_context(
+        page = browser_context.new_page()
+        subcategory_products = []
+        
+        try:
+            # Load first page
+            print("📡 Loading first page...")
+            page.goto(subcategory['url'], wait_until='networkidle', timeout=30000)
+            print(f"✓ Page loaded: {page.title()}\n")
+            
+            page_num = 1
+            
+            # Keep scraping while there are more pages
+            while True:
+                # Scrape current page
+                page_products = self.scrape_page(page, page_num, subcategory['name'])
+                subcategory_products.extend(page_products)
+                
+                # Check if there's a next page
+                if self.has_next_page(page):
+                    page_num += 1
+                    print(f"\n⏳ Waiting 2s before next page...")
+                    time.sleep(2)
+                    
+                    # Navigate to next page
+                    next_url = f"{subcategory['url']}?p={page_num}"
+                    print(f"📡 Loading page {page_num}: {next_url}")
+                    page.goto(next_url, wait_until='networkidle', timeout=30000)
+                else:
+                    print(f"\n✓ No more pages found. Reached last page: {page_num}")
+                    break
+            
+            print("\n" + "="*70)
+            print(f"✅ SUBCATEGORY COMPLETE: {subcategory['name']}")
+            print("="*70)
+            print(f"Total products scraped: {len(subcategory_products)}")
+            print(f"Across {page_num} pages\n")
+            
+        except Exception as e:
+            print(f"\n❌ Error scraping subcategory {subcategory['name']}: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        finally:
+            page.close()
+        
+        return subcategory_products
+    
+    def scrape_all_subcategories(self):
+        """Scrape all subcategories"""
+        
+        print("\n" + "="*70)
+        print("🚀 SUPERMARKET SCRAPER - WITH SUBCATEGORIES")
+        print("="*70)
+        print(f"\nMain URL: {self.base_url}\n")
+        
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(
                 user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             )
-            page = await context.new_page()
+            page = context.new_page()
             
             try:
                 # Load main page to get subcategories
                 print("📡 Loading main category page...")
-                await page.goto(self.base_url, wait_until='networkidle', timeout=30000)
-                print(f"✓ Page loaded: {await page.title()}\n")
+                page.goto(self.base_url, wait_until='networkidle', timeout=30000)
+                print(f"✓ Page loaded: {page.title()}\n")
                 
                 # Get subcategories
-                subcategories = await self.get_subcategories(page)
-                await page.close()
+                subcategories = self.get_subcategories(page)
+                page.close()
                 
                 if not subcategories:
                     print("❌ No subcategories found!")
                     return
                 
-                # Create semaphore for concurrency control
-                semaphore = asyncio.Semaphore(self.max_concurrent)
-                
-                print("\n" + "="*70)
-                print(f"🔄 STARTING CONCURRENT SCRAPING ({self.max_concurrent} at a time)")
-                print("="*70)
-                
-                # Scrape all subcategories concurrently
-                tasks = [
-                    self.scrape_subcategory(context, subcategory, semaphore)
-                    for subcategory in subcategories
-                ]
-                
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-                
-                # Process results
-                for result in results:
-                    if isinstance(result, Exception):
-                        print(f"❌ Subcategory scraping failed: {result}")
-                        continue
+                # Scrape each subcategory
+                for i, subcategory in enumerate(subcategories, 1):
+                    print(f"\n{'='*70}")
+                    print(f"📂 SUBCATEGORY {i}/{len(subcategories)}")
+                    print("="*70)
                     
-                    slug, name, products = result
+                    products = self.scrape_subcategory(context, subcategory)
                     
                     # Store products by subcategory
-                    self.subcategories[slug] = {
-                        'name': name,
+                    self.subcategories[subcategory['slug']] = {
+                        'name': subcategory['name'],
                         'products': products
                     }
                     
                     # Add to all products list
                     self.all_products.extend(products)
+                    
+                    # Small delay between subcategories
+                    if i < len(subcategories):
+                        print(f"\n⏳ Waiting 3s before next subcategory...")
+                        time.sleep(3)
                 
                 print("\n" + "="*70)
                 print("✅ ALL SUBCATEGORIES SCRAPED SUCCESSFULLY")
@@ -394,8 +374,8 @@ class SupermarketScraper:
                 traceback.print_exc()
                 
             finally:
-                await context.close()
-                await browser.close()
+                context.close()
+                browser.close()
     
     def download_image(self, image_url, product_id, image_index=0):
         """Download product image"""
@@ -589,16 +569,15 @@ class SupermarketScraper:
         """Main execution flow"""
         
         print("\n" + "="*70)
-        print("🛒 SUPERMARKET SCRAPER - OPTIMIZED (CONCURRENT)")
+        print("🛒 SUPERMARKET SCRAPER - PRODUCTION (WITH SUBCATEGORIES)")
         print("="*70)
         print(f"\nDate: {self.year}-{self.month}-{self.day}")
         print(f"Category: {self.category}")
         print(f"S3 Bucket: {self.s3_bucket or 'Not configured'}")
-        print(f"Concurrency: {self.max_concurrent} subcategories at a time")
         print()
         
-        # Step 1: Scrape all subcategories concurrently
-        asyncio.run(self.scrape_all_subcategories())
+        # Step 1: Scrape all subcategories
+        self.scrape_all_subcategories()
         
         if not self.all_products:
             print("\n❌ No products scraped, exiting")
@@ -638,14 +617,10 @@ if __name__ == "__main__":
     aws_access_key = os.getenv('AWS_ACCESS_KEY_ID')
     aws_secret_key = os.getenv('AWS_SECRET_ACCESS_KEY')
     
-    # Concurrency setting (default: 3 subcategories at a time)
-    max_concurrent = int(os.getenv('MAX_CONCURRENT_SUBCATEGORIES', '3'))
-    
     # Run scraper
     scraper = SupermarketScraper(
         s3_bucket=s3_bucket,
         aws_access_key=aws_access_key,
-        aws_secret_key=aws_secret_key,
-        max_concurrent_subcategories=max_concurrent
+        aws_secret_key=aws_secret_key
     )
     scraper.run()
