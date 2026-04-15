@@ -20,6 +20,20 @@ import boto3
 from urllib.parse import urlparse
 import hashlib
 
+# Helper function to clean illegal characters for Excel
+def clean_for_excel(value):
+    """Remove illegal characters that Excel/openpyxl cannot handle"""
+    if value is None:
+        return None
+    
+    if isinstance(value, str):
+        # Remove control characters except tab, newline, carriage return
+        # Excel doesn't allow characters in range 0x00-0x1F except 0x09, 0x0A, 0x0D
+        cleaned = ''.join(char for char in value if ord(char) >= 32 or char in '\t\n\r')
+        return cleaned
+    
+    return value
+
 class SupermarketScraper:
     def __init__(self, s3_bucket=None, aws_access_key=None, aws_secret_key=None, max_concurrent_subcategories=3):
         self.base_url = "https://www.sheeel.com/ar/supermarket.html"
@@ -533,6 +547,11 @@ class SupermarketScraper:
                 if include_s3_paths and 'local_image_paths' in df.columns:
                     df = df.drop(columns=['local_image_paths'])
                 
+                # Clean all string columns to remove illegal Excel characters
+                for col in df.columns:
+                    if df[col].dtype == 'object':  # String columns
+                        df[col] = df[col].apply(clean_for_excel)
+                
                 # Sheet name (max 31 characters for Excel)
                 sheet_name = slug[:31]
                 
@@ -544,6 +563,11 @@ class SupermarketScraper:
             df_all = pd.DataFrame(self.all_products)
             if include_s3_paths and 'local_image_paths' in df_all.columns:
                 df_all = df_all.drop(columns=['local_image_paths'])
+            
+            # Clean all string columns to remove illegal Excel characters
+            for col in df_all.columns:
+                if df_all[col].dtype == 'object':  # String columns
+                    df_all[col] = df_all[col].apply(clean_for_excel)
             
             df_all.to_excel(writer, sheet_name='ALL_PRODUCTS', index=False)
             print(f"✓ Sheet 'ALL_PRODUCTS': {len(df_all)} products")
