@@ -22,7 +22,10 @@ import hashlib
 
 # Helper function to clean illegal characters for Excel
 def clean_for_excel(value):
-    """Remove illegal characters that Excel/openpyxl cannot handle"""
+    """Remove illegal characters that Excel/openpyxl cannot handle
+    
+    Handles strings, lists, and nested structures recursively
+    """
     if value is None:
         return None
     
@@ -31,6 +34,12 @@ def clean_for_excel(value):
         # Excel doesn't allow characters in range 0x00-0x1F except 0x09, 0x0A, 0x0D
         cleaned = ''.join(char for char in value if ord(char) >= 32 or char in '\t\n\r')
         return cleaned
+    elif isinstance(value, list):
+        # Recursively clean each item in the list
+        return [clean_for_excel(item) for item in value]
+    elif isinstance(value, dict):
+        # Recursively clean each value in the dict
+        return {k: clean_for_excel(v) for k, v in value.items()}
     
     return value
 
@@ -547,10 +556,12 @@ class SupermarketScraper:
                 if include_s3_paths and 'local_image_paths' in df.columns:
                     df = df.drop(columns=['local_image_paths'])
                 
-                # Clean all string columns to remove illegal Excel characters
-                for col in df.columns:
-                    if df[col].dtype == 'object':  # String columns
-                        df[col] = df[col].apply(clean_for_excel)
+                # Clean ALL cells (including nested lists/dicts) to remove illegal Excel characters
+                # Use map() to apply clean_for_excel to every single cell
+                try:
+                    df = df.map(clean_for_excel)  # pandas >= 2.1.0
+                except AttributeError:
+                    df = df.applymap(clean_for_excel)  # pandas < 2.1.0
                 
                 # Sheet name (max 31 characters for Excel)
                 sheet_name = slug[:31]
@@ -564,10 +575,12 @@ class SupermarketScraper:
             if include_s3_paths and 'local_image_paths' in df_all.columns:
                 df_all = df_all.drop(columns=['local_image_paths'])
             
-            # Clean all string columns to remove illegal Excel characters
-            for col in df_all.columns:
-                if df_all[col].dtype == 'object':  # String columns
-                    df_all[col] = df_all[col].apply(clean_for_excel)
+            # Clean ALL cells (including nested lists/dicts) to remove illegal Excel characters
+            # Use map() to apply clean_for_excel to every single cell
+            try:
+                df_all = df_all.map(clean_for_excel)  # pandas >= 2.1.0
+            except AttributeError:
+                df_all = df_all.applymap(clean_for_excel)  # pandas < 2.1.0
             
             df_all.to_excel(writer, sheet_name='ALL_PRODUCTS', index=False)
             print(f"✓ Sheet 'ALL_PRODUCTS': {len(df_all)} products")
