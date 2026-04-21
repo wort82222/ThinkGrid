@@ -171,7 +171,11 @@ class SupermarketScraper:
         """Visit product detail page and extract all available fields"""
         try:
             detail_page = await context.new_page()
-            await detail_page.goto(product_url, wait_until='networkidle', timeout=30000)
+            response = await detail_page.goto(product_url, wait_until='networkidle', timeout=30000)
+            if response and response.status == 404:
+                print(f"       ⚠ Skipping (404 Not Found): {product_url}")
+                await detail_page.close()
+                return None
             await detail_page.wait_for_selector('#maincontent .product-info-main', timeout=10000)
             
             # Extract fields from product-info-main
@@ -308,7 +312,11 @@ class SupermarketScraper:
             try:
                 # Load first page
                 print("📡 Loading first page...")
-                await page.goto(subcategory['url'], wait_until='networkidle', timeout=30000)
+                response = await page.goto(subcategory['url'], wait_until='networkidle', timeout=30000)
+                if response and response.status == 404:
+                    print(f"⚠ Subcategory '{subcategory['name']}' returned 404 - URL may have changed. Skipping.")
+                    await page.close()
+                    return subcategory['slug'], subcategory['name'], []
                 print(f"✓ Page loaded: {await page.title()}\n")
                 
                 page_num = 1
@@ -328,7 +336,10 @@ class SupermarketScraper:
                         # Navigate to next page
                         next_url = f"{subcategory['url']}?p={page_num}"
                         print(f"📡 Loading page {page_num}: {next_url}")
-                        await page.goto(next_url, wait_until='networkidle', timeout=30000)
+                        response = await page.goto(next_url, wait_until='networkidle', timeout=30000)
+                        if response and response.status == 404:
+                            print(f"  ⚠ Page {page_num} returned 404, stopping pagination")
+                            break
                     else:
                         print(f"\n✓ No more pages found. Reached last page: {page_num}")
                         break
@@ -368,7 +379,11 @@ class SupermarketScraper:
             try:
                 # Load main page to get subcategories
                 print("📡 Loading main category page...")
-                await page.goto(self.base_url, wait_until='networkidle', timeout=30000)
+                response = await page.goto(self.base_url, wait_until='networkidle', timeout=30000)
+                if response and response.status == 404:
+                    print(f"❌ Main category page returned 404 - URL may have changed: {self.base_url}")
+                    await page.close()
+                    return
                 print(f"✓ Page loaded: {await page.title()}\n")
                 
                 # Get subcategories
