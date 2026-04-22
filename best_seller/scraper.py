@@ -276,9 +276,13 @@ class BestSellerScraper:
             old_price_el = detail_page.query_selector('.old-price .price')
             product_data['old_price'] = old_price_el.inner_text().strip() if old_price_el else None
             
-            # Special price
-            special_price_el = detail_page.query_selector('.special-price .price')
+            # Special price (handles both .special-price and .normal-price display cases)
+            special_price_el = detail_page.query_selector('.special-price .price, .normal-price .price')
             product_data['special_price'] = special_price_el.inner_text().strip() if special_price_el else None
+
+            # Normal price (only populated when product displays with .normal-price element)
+            normal_price_el = detail_page.query_selector('.normal-price .price')
+            product_data['normal_price'] = normal_price_el.inner_text().strip() if normal_price_el else None
             
             # Description
             desc_el = detail_page.query_selector('.product.attribute.overview .value')
