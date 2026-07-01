@@ -8,6 +8,7 @@ from playwright.sync_api import sync_playwright
 import json
 import re
 import os
+import sys
 import requests
 from datetime import datetime
 from pathlib import Path
@@ -17,6 +18,11 @@ import boto3
 from botocore.config import Config
 from urllib.parse import urlparse
 import hashlib
+
+_CF_ROOT = Path(__file__).resolve().parent.parent
+if str(_CF_ROOT) not in sys.path:
+    sys.path.insert(0, str(_CF_ROOT))
+from request_metrics import RequestMetricsTracker, build_daily_summary
 
 class CoolItemsScraper:
     def __init__(self, r2_bucket=None, cf_access_key=None, cf_secret_key=None, cf_endpoint_url=None):
@@ -52,6 +58,14 @@ class CoolItemsScraper:
         self.local_images_dir = self.local_data_dir / "images"
         self.local_data_dir.mkdir(exist_ok=True)
         self.local_images_dir.mkdir(exist_ok=True)
+
+        self.metrics = RequestMetricsTracker()
+
+    def _track_playwright_response(self, response, name=None, slug=None):
+        if response is None:
+            self.metrics.record_failure(name=name, slug=slug, detail="no response")
+            return
+        self.metrics.record_http_response(response.status, name=name, slug=slug)
     
     def extract_product_from_element(self, product_element):
         """Extract all available fields from a product element"""
@@ -246,6 +260,7 @@ class CoolItemsScraper:
         try:
             detail_page = context.new_page()
             response = detail_page.goto(product_url, wait_until='networkidle', timeout=30000)
+            self._track_playwright_response(response)
             if response and response.status == 404:
                 print(f"       ⚠ Skipping (404 Not Found): {product_url}")
                 detail_page.close()
@@ -390,6 +405,7 @@ class CoolItemsScraper:
                 # Load first page
                 print("📡 Loading first page...")
                 response = page.goto(self.base_url, wait_until='networkidle', timeout=30000)
+                self._track_playwright_response(response, name=self.category)
                 if response and response.status == 404:
                     print(f"❌ Main category page returned 404 - URL may have changed: {self.base_url}")
                     return
@@ -413,6 +429,7 @@ class CoolItemsScraper:
                         next_url = f"{self.base_url}?p={page_num}"
                         print(f"📡 Loading page {page_num}: {next_url}")
                         response = page.goto(next_url, wait_until='networkidle', timeout=30000)
+                        self._track_playwright_response(response, name=self.category)
                         if response and response.status == 404:
                             print(f"  ⚠ Page {page_num} returned 404, stopping pagination")
                             break
@@ -444,6 +461,7 @@ class CoolItemsScraper:
         try:
             # Download image
             response = requests.get(image_url, timeout=10, stream=True)
+            self.metrics.record_http_response(response.status_code)
             response.raise_for_status()
             
             # Detect proper extension from Content-Type header
@@ -473,6 +491,7 @@ class CoolItemsScraper:
             
         except Exception as e:
             print(f"  ⚠ Error downloading image for product {product_id}: {e}")
+            self.metrics.record_failure(detail=str(e)[:120])
             return None
     
     def download_all_images(self):
@@ -611,9 +630,31 @@ class CoolItemsScraper:
         # Upload to R2
         excel_r2_key = f"sheeel_data/year={self.year}/month={self.month}/day={self.day}/{self.category}/excel-files/{excel_filename}"
         self.upload_to_r2(excel_local_path, excel_r2_key)
+        self.upload_json_summary(len(self.products))
         
         return excel_local_path
     
+
+    def upload_json_summary(self, total_listings):
+        if not self.r2_client:
+            return
+
+        summary = build_daily_summary(
+            total_listings=total_listings,
+            request_metrics=self.metrics.build_block(),
+        )
+        datestamp = datetime.now().strftime("%Y%m%d")
+        summary_filename = f"summary_{datestamp}.json"
+        local_summary = self.local_data_dir / summary_filename
+        with open(local_summary, "w", encoding="utf-8") as fh:
+            json.dump(summary, fh, indent=2, ensure_ascii=False)
+
+        summary_r2_key = (
+            f"sheeel_data/year={self.year}/month={self.month}/day={self.day}/"
+            f"{self.category}/json-files/{summary_filename}"
+        )
+        self.upload_to_r2(str(local_summary), summary_r2_key)
+
     def run(self):
         """Main execution flow"""
         
